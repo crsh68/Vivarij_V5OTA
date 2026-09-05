@@ -1,0 +1,18 @@
+# Arduino build artefakti
+build/
+*.bin
+*.elf
+*.map
+*.hex
+
+# Arduino IDE cache
+.vscode/
+.pio/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Osobne/tajne konfiguracije koje ne treba javno dijeliti
+secrets.h
+my_credentials.h

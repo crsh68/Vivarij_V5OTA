@@ -63,7 +63,8 @@ connection.send('Connect ' + new Date()); };
 
   var ssid = document.getElementById('ssid_cred').value;
   var pass = document.getElementById('pass_cred').value;
-  var full_command = '#{"ssid":"'+ ssid +'", "pass":"' +pass +'"}';
+  var auth = document.getElementById('auth_cred').value;
+  var full_command = '#{"ssid":"'+ ssid +'", "pass":"' +pass +'", "auth":"' +auth +'"}';
   console.log(full_command);
   connection.send(full_command);
   location.replace('http://'+location.hostname+'/submit');
@@ -79,6 +80,8 @@ connection.send('Connect ' + new Date()); };
   <p style="font-family: verdana; text-align: center;"><input type="text" id="ssid_cred"></p>
   <p style="font-family: verdana; text-align: center;"><label for="pass_cred">Lozinka:</label></p>
   <p style="font-family: verdana; text-align: center;"><input type="text" id="pass_cred"></p>
+  <p style="font-family: verdana; text-align: center;"><label for="auth_cred">Blynk Auth Token:</label></p>
+  <p style="font-family: verdana; text-align: center;"><input type="text" id="auth_cred"></p>
 
   <p style="font-family: verdana; text-align: center;">
      <button type="button" onclick=credentials_rec();>Zapamti</button></p>
@@ -89,10 +92,6 @@ connection.send('Connect ' + new Date()); };
 
 
 )=====";
-
-
-//  <label for="auth_token">Auth Token:</label>
-//  <input type="text" id="auth_token"><br><br>
 
 
 void _webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t length)
@@ -152,7 +151,6 @@ void _webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t lengt
             Serial.print("Wrote: ");
             Serial.println(pass[i]);
           }
-/*
           Serial.println("writing eeprom auth token:");
           for (int i = 0; i < auth.length(); ++i)
           {
@@ -160,7 +158,7 @@ void _webSocketEvent(uint8_t num, WStype_t type, uint8_t * payload, size_t lengt
             Serial.print("Wrote: ");
             Serial.println(auth[i]);
           }
- */         
+
           EEPROM.commit();
           {
             // millis umjesto delay - u međuvremenu i dalje servisiramo websocket
@@ -219,16 +217,13 @@ void credentials::EEPROM_Config()
   Serial.print("Password: ");
   Serial.println(pass);
 
-/*  
-  String auth_token = "";
+  authToken = "";
   for (int i = 64; i < 100; ++i)
   {
-    auth_token += char(EEPROM.read(i));
+    authToken += char(EEPROM.read(i));
   }
-  Serial.print("Auth Token: ");
-  Serial.println(auth_token);
-  //return auth_token;
-*/  
+  Serial.print("Blynk Auth Token: ");
+  Serial.println(authToken);
 }
 
 
@@ -298,7 +293,14 @@ bool credentials::_testWifi()
 
     if (millis() - lastStep >= stepMs) {
       lastStep = millis();
-      Serial.println((secs*2 - (unsigned long)c*2) / 2);
+
+      // sekunde do isteka - računaju se izravno iz proteklog vremena i
+      // ograničene su na 0 prema dolje, tako da ne mogu "otići u minus"
+      // i uzrokovati underflow (koji bi ispisao ogroman broj poput 2147483647)
+      long secondsLeft = (long)secs - (long)((millis() - startTime) / 1000UL);
+      if (secondsLeft < 0) secondsLeft = 0;
+      Serial.println(secondsLeft);
+
       WiFiLogo(74, 115, c);
       drawProgressbar(1, 200, 238, 20, secs*2 - c, secs*2);
       c++;
@@ -360,31 +362,26 @@ void credentials::beginOTA(const char* otaUser, const char* otaPass)
 {
   ElegantOTA.begin(&server, otaUser, otaPass);
 
-  ElegantOTA.onStart([]() {
+  // VAŽNO: ovi callbackovi se izvršavaju iz AsyncTCP FreeRTOS taska,
+  // NE iz glavnog loop() taska. TFT_eSPI/SPI pozivi napravljeni izravno
+  // ovdje uzrokuju krah ("assert failed: xTaskPriorityDisinherit").
+  // Zato se ovdje SAMO postavljaju zastavice - stvarno iscrtavanje
+  // radi otaLoop(), koja se poziva iz glavnog loop() i time je sigurna.
+  ElegantOTA.onStart([this]() {
     Serial.println("OTA: nadogradnja firmvera započela");
-    tft.fillRoundRect(10, 90, 220, 60, 8, TFT_BLACK);
-    tft.drawRoundRect(10, 90, 220, 60, 8, TFT_WHITE);
-    tft.setTextDatum(C_BASELINE);
-    tft.setFreeFont(&FreeSans9pt7b);
-    tft.setTextColor(TFT_YELLOW, TFT_BLACK);
-    tft.setTextSize(1);
-    tft.drawString("OTA nadogradnja...", 120, 120, 1);
+    _otaStartPending = true;
   });
 
   ElegantOTA.onProgress([this](size_t current, size_t final) {
-    static unsigned long lastDraw = 0;
-    if (final > 0 && millis() - lastDraw > 200) {
-      lastDraw = millis();
-      drawProgressbar(15, 130, 210, 14, current, final);
-    }
+    _otaCurrent = current;
+    _otaFinal = final;
+    _otaProgressPending = true;
   });
 
-  ElegantOTA.onEnd([](bool success) {
-    tft.fillRoundRect(10, 90, 220, 60, 8, TFT_BLACK);
-    tft.drawRoundRect(10, 90, 220, 60, 8, TFT_WHITE);
-    tft.setTextColor(success ? TFT_GREEN : TFT_RED, TFT_BLACK);
-    tft.drawString(success ? "OTA uspjela, restart..." : "OTA neuspjela!", 120, 120, 1);
+  ElegantOTA.onEnd([this](bool success) {
     Serial.println(success ? "OTA: uspjeh, restartam se" : "OTA: neuspjeh");
+    _otaSuccess = success;
+    _otaEndPending = true;
   });
 
   server.begin();
@@ -394,6 +391,36 @@ void credentials::beginOTA(const char* otaUser, const char* otaPass)
 void credentials::otaLoop()
 {
   ElegantOTA.loop();
+
+  // Stvarno iscrtavanje po TFT-u radi se ovdje (glavni loop() task),
+  // nikad direktno unutar ElegantOTA callbackova iznad.
+  if (_otaStartPending) {
+    _otaStartPending = false;
+    tft.fillRoundRect(10, 90, 220, 60, 8, TFT_BLACK);
+    tft.drawRoundRect(10, 90, 220, 60, 8, TFT_WHITE);
+    tft.setTextDatum(C_BASELINE);
+    tft.setFreeFont(&FreeSans9pt7b);
+    tft.setTextColor(TFT_YELLOW, TFT_BLACK);
+    tft.setTextSize(1);
+    tft.drawString("OTA nadogradnja...", 120, 120, 1);
+  }
+
+  static unsigned long lastDraw = 0;
+  if (_otaProgressPending && millis() - lastDraw > 200) {
+    _otaProgressPending = false;
+    lastDraw = millis();
+    if (_otaFinal > 0) {
+      drawProgressbar(15, 130, 210, 14, _otaCurrent, _otaFinal);
+    }
+  }
+
+  if (_otaEndPending) {
+    _otaEndPending = false;
+    tft.fillRoundRect(10, 90, 220, 60, 8, TFT_BLACK);
+    tft.drawRoundRect(10, 90, 220, 60, 8, TFT_WHITE);
+    tft.setTextColor(_otaSuccess ? TFT_GREEN : TFT_RED, TFT_BLACK);
+    tft.drawString(_otaSuccess ? "OTA uspjela, restart..." : "OTA neuspjela!", 120, 120, 1);
+  }
 }
 
 

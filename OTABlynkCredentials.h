@@ -47,6 +47,10 @@ class credentials {
   void Erase_eeprom();
   String ssid = "";
   String pass = "";
+  String authToken = ""; // Blynk auth token - unosi se preko web sučelja i
+                          // čuva u EEPROM-u (NIKAD u kodu), da bi automatski
+                          // update firmvera s GitHuba (gdje je token uklonjen
+                          // radi sigurnosti) ne bi prepisao tvoj stvarni token
   void fillArc(int x, int y, int start_angle, int seg_count, int rx, int ry, int w, unsigned int colour);
   void beginOTA(const char* otaUser, const char* otaPass); // web OTA nadogradnja firmvera (http://<IP>/update)
   void otaLoop();                                          // pozvati u glavnoj loop() petlji
@@ -56,5 +60,18 @@ class credentials {
   void _createWebServer(void);
   void drawProgressbar(int x, int y, int width, int height, int progress, int full);
   void WiFiLogo(int x, int y, int frame);
-  
+
+  // ---- stanje OTA prikaza ----
+  // ElegantOTA callbackovi (onStart/onProgress/onEnd) izvršavaju se iz
+  // AsyncTCP FreeRTOS taska, NE iz glavnog loop() taska. TFT_eSPI/SPI
+  // pozivi napravljeni izravno u tim callbackovima uzrokuju krah
+  // ("assert failed: xTaskPriorityDisinherit"). Zato callbackovi samo
+  // postave ove zastavice, a stvarno iscrtavanje radi otaLoop() -
+  // koja se poziva iz glavnog loop() i time je sigurna za TFT/SPI.
+  volatile bool _otaStartPending = false;
+  volatile bool _otaProgressPending = false;
+  volatile bool _otaEndPending = false;
+  volatile bool _otaSuccess = false;
+  volatile size_t _otaCurrent = 0;
+  volatile size_t _otaFinal = 0;
 };

@@ -15,16 +15,33 @@
 ====================================== */
 
 
-#define BLYNK_TEMPLATE_ID "YOUR_BLYNK_TEMPLATE_ID"     // ⚠️ zamijeni svojim - Blynk konzola → My Templates
-#define BLYNK_TEMPLATE_NAME "YOUR_BLYNK_TEMPLATE_NAME" // ⚠️ mora točno odgovarati nazivu templatea u Blynk konzoli
+#define BLYNK_TEMPLATE_ID "TMPLrXhDwlgo"     // ⚠️ zamijeni svojim - Blynk konzola → My Templates
+#define BLYNK_TEMPLATE_NAME "Vivarij32"      // ⚠️ mora točno odgovarati nazivu templatea u Blynk konzoli
 #define BLYNK_DEVICE_NAME "Vivarij32"
-#define BLYNK_AUTH_TOKEN "YOUR_BLYNK_AUTH_TOKEN"        // ⚠️ zamijeni svojim tokenom - NIKAD ga ne commitaj javno!
+// BLYNK_AUTH_TOKEN se NAMJERNO ne definira ovdje (compile-time) - token se
+// unosi preko web sučelja pri prvom postavljanju i čuva u EEPROM-u
+// (Credentials.authToken), NIKAD u samom kodu. Ovo je nužno da automatski
+// update firmvera s (javnog) GitHub repozitorija ne bi prepisao tvoj
+// stvarni token praznim placeholderom - EEPROM particija je odvojena od
+// programske particije koju OTA prepisuje, pa ostaje netaknuta.
 
 #include "fan2.h"
 #include "alert.h"
 #include "day.h"
 #include "night.h"
 #include "miniFont.h"
+#include "GithubOTA.h"
+
+// ---- Automatski GitHub OTA update ----
+// Ako se poveća FW_VERSION i objavi nova .bin datoteka na GITHUB_FIRMWARE_URL
+// (uz odgovarajuću novu vrijednost u version.txt na GITHUB_VERSION_URL),
+// uređaj će je sam preuzeti i flashati. Vidi README.md ("Objavljivanje
+// nove verzije") za točan postupak.
+#define FW_VERSION "1.0.0"
+const char* GITHUB_VERSION_URL  = "https://raw.githubusercontent.com/crsh68/Vivarij_V5OTA/main/firmware/version.txt";
+const char* GITHUB_FIRMWARE_URL = "https://raw.githubusercontent.com/crsh68/Vivarij_V5OTA/main/firmware/Vivarij_V5OTA.ino.bin";
+#define GITHUB_AUTOUPDATE_ENABLED true          // false = potpuno isključi automatsku provjeru
+#define GITHUB_CHECK_INTERVAL_MS (24UL*60*60*1000UL) // svaka 24h
 
 #include <TFT_eSPI.h> // Hardware-specific library
 #include <SPI.h>
@@ -575,16 +592,16 @@ void sensorRead() {
     tft.drawString("Parina kucica", 170, 5, 1);
 
     // ---- indikator statusa senzora (crveno = kvar, prazno = OK) ----
-    tft.fillRect(0, 2, 65, 20, TFT_BROWN); // očisti prethodni tekst
+    tft.fillRect(2, 145, 120, 25, TFT_DARKGREEN);
     if (!ahtOK || !dsOK || !pcfOK) {
       String greska = "";
-      if (!ahtOK) greska += "AHT ";
-      if (!dsOK)  greska += "DS ";
-      if (!pcfOK) greska += "REL";
-      tft.setTextColor(TFT_RED, TFT_BROWN);
-      tft.drawString(greska, 65, 5, 1);
+      if (!ahtOK) greska += " AHT";
+      if (!dsOK)  greska += " DS";
+      if (!pcfOK) greska += " REL";
+      tft.setTextColor(TFT_RED, TFT_DARKGREEN);
+      tft.drawString(greska, 120, 150, 1);
     }
-    
+
     int t=tempS1+0.5;
     tft.setTextSize(2);
     tft.setTextColor(TFT_GREEN, TFT_DARKGREEN);
@@ -785,7 +802,7 @@ void setup()
 
   if (Credentials.credentials_get())
   {
-    Blynk.config(BLYNK_AUTH_TOKEN);
+    Blynk.config(Credentials.authToken.c_str());
     connected_to_internet = 1;
   }
   else
@@ -815,12 +832,13 @@ void setup()
     tft.drawString("Pokrecem hotspot:", 120, 17, 1);
     tft.setTextSize(2);
     tft.drawString(esp_ssid, 120, 120, 2);
-    tft.setTextSize(2);
-    String WiFiIP = WiFi.softAPIP().toString().c_str();
-    tft.drawString(WiFiIP, 120, 160, 2);
-    
-    Credentials.setupAP(esp_ssid, esp_pass);
+
+    Credentials.setupAP(esp_ssid, esp_pass); // AP se mora pokrenuti PRIJE čitanja IP-a
     connected_to_internet = 0;
+
+    tft.setTextSize(2);
+    String WiFiIP = WiFi.softAPIP().toString();
+    tft.drawString(WiFiIP, 120, 160, 2);
   }
 
   if (connected_to_internet)
@@ -883,7 +901,41 @@ void setup()
     // Stranica dostupna na http://<IP adresa ESP-a>/update
     // VAŽNO: promijeni zadanu lozinku prije korištenja!
     Credentials.beginOTA("admin", "vivarij123");
+
+//------------- AUTOMATSKI GITHUB OTA UPDATE ---------
+#if GITHUB_AUTOUPDATE_ENABLED
+    checkGithubUpdate();  // jedna provjera odmah pri spajanju
+    timer.setInterval(GITHUB_CHECK_INTERVAL_MS, checkGithubUpdate); // pa dalje periodički
+#endif
   }
+}
+
+// Provjerava GitHub za noviju verziju firmvera i po potrebi je preuzima/flasha.
+// Prije stvarnog flashanja isključuje grijače/maglicu iz sigurnosnih razloga,
+// jer se glavna petlja (pa time i sensorRead()/regulacija) blokira dok
+// preuzimanje traje - uređaj se nakon uspješne nadogradnje sam restarta.
+void checkGithubUpdate()
+{
+  tft.setTextDatum(C_BASELINE);
+  tft.setFreeFont(&FreeSans9pt7b);
+  tft.setTextColor(TFT_YELLOW, TFT_BLACK);
+  tft.setTextSize(1);
+  tft.fillRect(0, 100, 240, 40, TFT_BLACK);
+  tft.drawString("Provjera GitHub nadogradnje...", 120, 120, 1);
+
+  relejWrite(relejGrijac, isklj);
+  relejWrite(relejKamen, isklj);
+  relejWrite(relejVlaga, isklj);
+
+  bool updating = githubCheckAndUpdate(FW_VERSION, GITHUB_VERSION_URL, GITHUB_FIRMWARE_URL);
+
+  tft.fillRect(0, 100, 240, 40, TFT_BLACK);
+  if (!updating) {
+    tft.setTextColor(TFT_WHITE, TFT_BLACK);
+    tft.drawString("Firmware je azuran", 120, 120, 1);
+  }
+  // ako je updating==true, uređaj se već restarta (rebootOnUpdate) prije
+  // nego što ovaj redak i stigne izvršiti u praksi
 }
 
 

@@ -95,25 +95,6 @@ Nakon što je uređaj spojen na WiFi:
 2. Otvori `http://<IP adresa uređaja>/update` u pregledniku (IP se ispisuje na TFT ekranu nakon spajanja i u Serial Monitoru)
 3. Odaberi izvezenu `.bin` datoteku i uploadaj
 
-## Automatski GitHub OTA update
-
-Uređaj sam provjerava GitHub pri svakom spajanju na WiFi i zatim periodički (zadano svaka 24h, podesivo preko `GITHUB_CHECK_INTERVAL_MS`). Uspoređuje svoju kompajliranu verziju (`FW_VERSION`) sa sadržajem `firmware/version.txt` u repozitoriju — ako je različita, sam preuzima `firmware/Vivarij_V5OTA.ino.bin` i flasha se, pa se restarta.
-
-**Prije prve upotrebe ove značajke:**
-- U `Vivarij_V5OTA.ino` zamijeni `YOUR_GITHUB_USERNAME` u `GITHUB_VERSION_URL` i `GITHUB_FIRMWARE_URL` svojim GitHub korisničkim imenom
-- Ako ne želiš automatski update, postavi `#define GITHUB_AUTOUPDATE_ENABLED false`
-
-**Objavljivanje nove verzije** (svaki put kad želiš da se svi uređaji sami nadograde):
-1. Poveća `#define FW_VERSION "1.0.0"` u `.ino` (npr. na `"1.0.1"`)
-2. Arduino IDE → **Sketch → Export Compiled Binary**
-3. Kopiraj generirani `.bin` u `firmware/Vivarij_V5OTA.ino.bin` (prepiši postojeći)
-4. Upiši **istu** novu vrijednost u `firmware/version.txt` (npr. `1.0.1`, bez navodnika i bez novog reda na kraju)
-5. `git add firmware/ Vivarij_V5OTA.ino && git commit -m "v1.0.1" && git push`
-
-Svi uređaji koji su spojeni na WiFi preuzet će novu verziju sami, u roku od maksimalno `GITHUB_CHECK_INTERVAL_MS` (zadano 24h), ili odmah pri sljedećem spajanju/restartu.
-
-**Sigurnosna napomena:** provjera verzije i preuzimanje koriste `client.setInsecure()` (bez provjere TLS certifikata) radi jednostavnosti — GitHub certifikati se s vremena na vrijeme mijenjaju pa bi "pinani" certifikat s vremenom prestao raditi bez održavanja. Kompromis je da netko na istoj WiFi mreži teoretski može pokušati podmetnuti lažni odgovor tijekom provjere; `Update.h` svejedno odbija skraćenu/oštećenu datoteku prije nego je flash, ali ne provjerava je li sadržaj *legitiman* firmware. Za veću sigurnost razmisli o pinanju GitHub root CA certifikata u `GithubOTA.cpp`.
-
 ## Blynk konfiguracija (datastreams / kontrole)
 
 Blynk **nema** ugrađenu opciju za izvoz predloška u datoteku, pa se konfiguracija ne može commitati kao gotov fajl. Ako želiš iskoristiti gotov predložak (npr. za drugi uređaj), u Blynk.Console → **Templates** → tvoj template → izbornik → **Duplicate** napravi kopiju unutar samog Blynk sučelja.
